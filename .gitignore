@@ -31,7 +31,11 @@ yarn-error.*
 *.pem
 
 # local env files
+.env
 .env*.local
+
+# Netlify CLI site link (local-machine specific, not project config)
+.netlify/
 
 # typescript
 *.tsbuildinfo
