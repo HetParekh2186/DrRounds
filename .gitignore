@@ -26,6 +26,7 @@ build/
 /models/
 /data/raw/
 /data/cache/
+/_trainer_checkpoints/
 
 # OS / editor
 .DS_Store

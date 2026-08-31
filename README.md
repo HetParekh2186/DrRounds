@@ -131,6 +131,12 @@ See [`data/pubmedqa.py`](src/doctor_rounds/data/pubmedqa.py) — row-parsing is 
 without a network call; the actual HuggingFace download is exercised by a real integration test
 (`pytest -m integration`, also run in CI as its own job).
 
+The faithfulness classifier (below) trains and is benchmarked on a second real dataset: **SciFact**
+(Wadden et al., 2020) — 957 labeled train claims and 338 labeled validation claims, each a scientific
+claim paired with a cited abstract and a SUPPORT/CONTRADICT verdict. See
+[`data/scifact.py`](src/doctor_rounds/data/scifact.py), and [Faithfulness classifier](#faithfulness-classifier)
+below for why claim-verification data is the right shape for faithfulness training.
+
 ## Benchmark
 
 [`scripts/run_pubmedqa_benchmark.py`](scripts/run_pubmedqa_benchmark.py) runs real retrieval — all
