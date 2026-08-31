@@ -64,6 +64,14 @@ class UnicodeFakeLLM:
         return "Café study — α-blockers reduced risk → significant."
 
 
+class FakeJudgeForClassifierTest:
+    def score_faithfulness(self, answer: str, context: str) -> float:
+        return 0.9
+
+    def score_relevance(self, answer: str, question: str) -> float:
+        return 0.8
+
+
 class TestInit:
     def test_writes_starter_config(self, tmp_path):
         out = tmp_path / "config.yaml"
@@ -114,6 +122,25 @@ class TestRun:
         data = json.loads(config_path.with_suffix(".results.json").read_text(encoding="utf-8"))
         score_names = {s["name"] for s in data["case_results"][0]["scores"]}
         assert "faithfulness" not in score_names
+
+    def test_judge_type_local_classifier_reaches_build_classifier_judge(self, monkeypatch, tmp_path):
+        # end-to-end config wiring for judge.type: local_classifier --
+        # _build_classifier_judge itself is exercised for real (against a
+        # tiny checkpoint) by TestBuildClassifierJudgeReal above; this
+        # only checks that the config option actually reaches it.
+        captured = {}
+
+        def fake_classifier_judge(cfg, llm):
+            captured["cfg"] = cfg
+            return FakeJudgeForClassifierTest()
+
+        monkeypatch.setattr(cli, "_build_classifier_judge", fake_classifier_judge)
+        config_text = MINIMAL_CONFIG.replace("use_judge: false", "use_judge: true") + (
+            "judge:\n  type: local_classifier\n  model_dir: some/dir\n"
+        )
+        result, _ = self._invoke_with_fakes(monkeypatch, tmp_path, config_text)
+        assert result.exit_code == 0, result.output
+        assert captured["cfg"] == {"type": "local_classifier", "model_dir": "some/dir"}
 
     def test_writes_results_with_characters_outside_cp1252(self, monkeypatch, tmp_path):
         # Regression test: Path.write_text()'s default encoding is the
@@ -188,6 +215,73 @@ class TestBuildLLM:
     def test_unsupported_type_raises_with_the_bad_value_named(self):
         with pytest.raises(Exception, match="made-up-provider"):
             cli._build_llm({"type": "made-up-provider"})
+
+
+class TestBuildJudge:
+    """`_build_classifier_judge` is monkeypatched here rather than
+    exercised for real -- it needs torch/transformers and a trained
+    checkpoint on disk, covered separately by the
+    @pytest.mark.integration test below using a tiny test-fixture model."""
+
+    def test_llm_is_the_default(self):
+        judge = cli._build_judge({}, FakeLLM())
+        from doctor_rounds.metrics.generation import LLMJudge
+
+        assert isinstance(judge, LLMJudge)
+
+    def test_llm_type_explicit(self):
+        judge = cli._build_judge({"type": "llm"}, FakeLLM())
+        from doctor_rounds.metrics.generation import LLMJudge
+
+        assert isinstance(judge, LLMJudge)
+
+    def test_local_classifier_type_delegates_to_build_classifier_judge(self, monkeypatch):
+        sentinel = object()
+        captured = {}
+
+        def fake_build(cfg, llm):
+            captured["cfg"] = cfg
+            captured["llm"] = llm
+            return sentinel
+
+        monkeypatch.setattr(cli, "_build_classifier_judge", fake_build)
+        llm = FakeLLM()
+        cfg = {"type": "local_classifier", "model_dir": "some/dir"}
+        result = cli._build_judge(cfg, llm)
+        assert result is sentinel
+        assert captured["cfg"] == cfg
+        assert captured["llm"] is llm
+
+    def test_unsupported_type_raises_with_the_bad_value_named(self):
+        with pytest.raises(Exception, match="made-up-judge"):
+            cli._build_judge({"type": "made-up-judge"}, FakeLLM())
+
+
+@pytest.mark.integration
+class TestBuildClassifierJudgeReal:
+    """Builds a real `ClassifierJudge` against a tiny HF test-fixture
+    checkpoint (kilobytes, not a real trained model) to verify the wiring
+    actually works end to end -- torch/transformers are required, hence
+    `pytest.importorskip`, consistent with test_classifier_model.py."""
+
+    def test_builds_a_working_judge(self, tmp_path):
+        pytest.importorskip("torch")
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+        name = "hf-internal-testing/tiny-random-BertForSequenceClassification"
+        tokenizer = AutoTokenizer.from_pretrained(name)
+        model = AutoModelForSequenceClassification.from_pretrained(name, num_labels=2)
+        tokenizer.save_pretrained(tmp_path)
+        model.save_pretrained(tmp_path)
+
+        class NumericFakeLLM:
+            def generate(self, prompt: str) -> str:
+                return "5"  # LLMJudge normalizes 0-10 scores to 0-1
+
+        judge = cli._build_classifier_judge({"model_dir": str(tmp_path)}, NumericFakeLLM())
+        assert 0.0 <= judge.score_faithfulness("a claim", "a context") <= 1.0
+        # relevance is delegated to the plain LLMJudge, not the classifier
+        assert judge.score_relevance("an answer", "a question") == pytest.approx(0.5)
 
 
 class TestLoadCorpusAndTestCasesSourceValidation:

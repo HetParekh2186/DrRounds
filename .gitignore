@@ -28,6 +28,10 @@ build/
 /data/cache/
 /_trainer_checkpoints/
 
+# doctor-rounds CLI working files (user-generated, not repo content)
+*.results.json
+/doctor-rounds.yaml
+
 # OS / editor
 .DS_Store
 .vscode/

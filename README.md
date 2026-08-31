@@ -122,6 +122,12 @@ will have the configured LLM write questions directly from your own indexed corp
 [Synthetic test sets](#synthetic-test-sets)) — the way to actually evaluate a pipeline built over
 your own documents rather than a public benchmark.
 
+Faithfulness doesn't have to come from an LLM judge either: set `judge.type: local_classifier` to
+score it with the trained classifier instead (see [Faithfulness classifier](#faithfulness-classifier))
+— worth doing, since the benchmark there found a small local LLM judge (the zero-cost default) can be
+actively unreliable: scoring an absurd, wrong answer *higher* than a correct one on manual spot checks.
+Relevance still needs the `llm`, since the classifier was only trained on (claim, context) pairs.
+
 ## Data
 
 Test cases and the retrieval corpus come from **PubMedQA** (Jin et al., 2019), loaded for real from

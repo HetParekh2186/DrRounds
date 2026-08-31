@@ -23,7 +23,7 @@ from doctor_rounds.adapters.vectorstore import ChromaVectorStore, VectorStore
 from doctor_rounds.core.runner import run_evaluation
 from doctor_rounds.core.types import Chunk, TestCase
 from doctor_rounds.data import pubmedqa
-from doctor_rounds.metrics.generation import LLMJudge
+from doctor_rounds.metrics.generation import Judge, LLMJudge
 from doctor_rounds.testset.generator import generate_test_set
 
 app = typer.Typer(
@@ -66,7 +66,17 @@ test_cases:
   # seed: 42             # (source: generated only) makes chunk sampling reproducible
 
 k: 10                   # how many chunks to retrieve per question
-use_judge: true         # score faithfulness/relevance with an LLM judge (extra LLM calls)
+use_judge: true         # score faithfulness/relevance (extra calls, LLM or local classifier)
+
+# type: llm (default) scores both faithfulness and relevance with the `llm` above.
+# type: local_classifier scores faithfulness with a locally fine-tuned classifier
+# (see scripts/train_faithfulness_classifier.py — much cheaper/faster and, per the
+# README's real benchmark numbers, more reliable than a small local LLM judge) and
+# relevance with the `llm` above, since the classifier is only trained for faithfulness.
+judge:
+  type: llm
+  # model_dir: models/faithfulness-classifier   # (local_classifier only) trained checkpoint path
+  # max_length: 256                              # (local_classifier only) must match training
 """
 
 
@@ -104,6 +114,35 @@ def _build_llm(cfg: dict[str, Any]) -> LLM:
     if llm_type == "openai":
         return OpenAILLM(model=cfg.get("model", "gpt-4o-mini"), api_key=cfg.get("api_key"))
     raise typer.BadParameter(f"Unsupported llm.type: {llm_type!r} (expected ollama, anthropic, or openai)")
+
+
+def _build_judge(cfg: dict[str, Any], llm: LLM) -> Judge:
+    judge_type = cfg.get("type", "llm")
+    if judge_type == "llm":
+        return LLMJudge(llm)
+    if judge_type == "local_classifier":
+        return _build_classifier_judge(cfg, llm)
+    raise typer.BadParameter(f"Unsupported judge.type: {judge_type!r} (expected llm or local_classifier)")
+
+
+def _build_classifier_judge(cfg: dict[str, Any], llm: LLM) -> Judge:
+    """Split out from `_build_judge` so tests can monkeypatch this one
+    function instead of needing a real torch/transformers install and a
+    trained checkpoint on disk for every CLI-flow test — see test_cli.py.
+
+    The import is local (not at module level) because torch/transformers
+    are a genuinely heavy, GPU-shaped dependency this project keeps out
+    of the default install — see the `dev` extra's comment in
+    pyproject.toml. Nothing here needs them unless judge.type is
+    actually set to local_classifier.
+    """
+    from doctor_rounds.classifier.model import ClassifierJudge, LocalFaithfulnessClassifier
+
+    classifier = LocalFaithfulnessClassifier(
+        cfg.get("model_dir", "models/faithfulness-classifier"),
+        max_length=cfg.get("max_length", 256),  # matches scripts/train_faithfulness_classifier.py's default
+    )
+    return ClassifierJudge(classifier, relevance_judge=LLMJudge(llm))
 
 
 def _load_corpus(cfg: dict[str, Any]) -> list[Chunk]:
@@ -149,7 +188,7 @@ def run(config_path: str = typer.Argument(..., help="Path to a YAML config (see 
     store.add(corpus)
 
     llm = _build_llm(config.get("llm", {}))
-    judge = LLMJudge(llm) if config.get("use_judge", True) else None
+    judge = _build_judge(config.get("judge", {}), llm) if config.get("use_judge", True) else None
 
     console.print("[bold]Loading test cases...[/bold]")
     test_cases = _load_test_cases(config.get("test_cases", {}), corpus, llm)
