@@ -77,7 +77,7 @@ def init(path: str = typer.Argument("doctor-rounds.yaml", help="Where to write t
     if out.exists():
         console.print(f"[red]{path} already exists — not overwriting.[/red]")
         raise typer.Exit(1)
-    out.write_text(_STARTER_CONFIG)
+    out.write_text(_STARTER_CONFIG, encoding="utf-8")
     console.print(f"[green]Wrote {path}.[/green] Edit it, then run: doctor-rounds run {path}")
 
 
@@ -138,7 +138,7 @@ def _load_test_cases(cfg: dict[str, Any], corpus: list[Chunk], llm: LLM) -> list
 @app.command()
 def run(config_path: str = typer.Argument(..., help="Path to a YAML config (see `doctor-rounds init`)")) -> None:
     """Run a full evaluation from a YAML config file."""
-    config = yaml.safe_load(Path(config_path).read_text())
+    config = yaml.safe_load(Path(config_path).read_text(encoding="utf-8"))
 
     console.print("[bold]Loading corpus...[/bold]")
     corpus = _load_corpus(config.get("corpus", {}))
@@ -173,7 +173,7 @@ def run(config_path: str = typer.Argument(..., help="Path to a YAML config (see 
     console.print(table)
 
     out_path = Path(config_path).with_suffix(".results.json")
-    out_path.write_text(report.model_dump_json(indent=2))
+    out_path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
     console.print(f"[green]Full results written to {out_path}[/green]")
 
 

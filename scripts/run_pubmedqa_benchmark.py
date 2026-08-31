@@ -104,7 +104,7 @@ def main() -> None:
         print(f"  {key}: {value:.4f}" if isinstance(value, float) else f"  {key}: {value}")
 
     out_path = Path(__file__).parent / "benchmark_results.json"
-    out_path.write_text(json.dumps({"summary": summary, "per_case": per_case}, indent=2))
+    out_path.write_text(json.dumps({"summary": summary, "per_case": per_case}, indent=2), encoding="utf-8")
     print(f"\nFull results written to {out_path}")
 
 

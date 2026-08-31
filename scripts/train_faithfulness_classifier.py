@@ -187,7 +187,7 @@ def main() -> None:
         "class_weights": weights_tensor.tolist(),
         "eval_metrics": {k.removeprefix("eval_"): v for k, v in final_metrics.items()},
     }
-    Path(args.metrics_out).write_text(json.dumps(report, indent=2))
+    Path(args.metrics_out).write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(f"Wrote training report to {args.metrics_out}")
 
 

@@ -103,7 +103,7 @@ def main() -> None:
         },
     }
 
-    Path(args.out).write_text(json.dumps(report, indent=2))
+    Path(args.out).write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps(report, indent=2))
     print(f"Wrote {args.out}")
 

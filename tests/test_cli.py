@@ -9,6 +9,7 @@ test files).
 """
 
 import json
+import locale
 
 import pytest
 from typer.testing import CliRunner
@@ -55,20 +56,28 @@ class FakeLLM:
         return "A generated answer."
 
 
+class UnicodeFakeLLM:
+    """Returns text containing characters cp1252 can't represent — real
+    PubMedQA abstracts and generated answers routinely do too."""
+
+    def generate(self, prompt: str) -> str:
+        return "Café study — α-blockers reduced risk → significant."
+
+
 class TestInit:
     def test_writes_starter_config(self, tmp_path):
         out = tmp_path / "config.yaml"
         result = runner.invoke(cli.app, ["init", str(out)])
         assert result.exit_code == 0
         assert out.exists()
-        assert "pipeline_name" in out.read_text()
+        assert "pipeline_name" in out.read_text(encoding="utf-8")
 
     def test_refuses_to_overwrite_existing_file(self, tmp_path):
         out = tmp_path / "config.yaml"
-        out.write_text("existing content")
+        out.write_text("existing content", encoding="utf-8")
         result = runner.invoke(cli.app, ["init", str(out)])
         assert result.exit_code != 0
-        assert out.read_text() == "existing content"  # untouched
+        assert out.read_text(encoding="utf-8") == "existing content"  # untouched
 
 
 class TestRun:
@@ -79,7 +88,7 @@ class TestRun:
         monkeypatch.setattr(cli, "_load_test_cases", lambda cfg, corpus, llm: [TEST_CASE])
 
         config_path = tmp_path / "config.yaml"
-        config_path.write_text(config_text)
+        config_path.write_text(config_text, encoding="utf-8")
         result = runner.invoke(cli.app, ["run", str(config_path)])
         return result, config_path
 
@@ -94,7 +103,7 @@ class TestRun:
         assert result.exit_code == 0, result.output
         results_path = config_path.with_suffix(".results.json")
         assert results_path.exists()
-        data = json.loads(results_path.read_text())
+        data = json.loads(results_path.read_text(encoding="utf-8"))
         assert data["pipeline_name"] == "test-pipeline"
         assert len(data["case_results"]) == 1
         assert data["case_results"][0]["test_case"]["id"] == "tc1"
@@ -102,15 +111,41 @@ class TestRun:
     def test_use_judge_false_omits_generation_metrics(self, monkeypatch, tmp_path):
         result, config_path = self._invoke_with_fakes(monkeypatch, tmp_path, MINIMAL_CONFIG)
         assert result.exit_code == 0, result.output
-        data = json.loads(config_path.with_suffix(".results.json").read_text())
+        data = json.loads(config_path.with_suffix(".results.json").read_text(encoding="utf-8"))
         score_names = {s["name"] for s in data["case_results"][0]["scores"]}
         assert "faithfulness" not in score_names
+
+    def test_writes_results_with_characters_outside_cp1252(self, monkeypatch, tmp_path):
+        # Regression test: Path.write_text()'s default encoding is the
+        # platform's preferred one (cp1252 on Windows), not UTF-8 -- real
+        # PubMedQA/generated text routinely contains characters cp1252
+        # can't represent (en/em dashes, Greek letters, accents), which
+        # crashed `doctor-rounds run` on Windows with a UnicodeEncodeError
+        # writing the results file. cli.py now passes encoding="utf-8"
+        # explicitly everywhere it reads/writes text. Patching
+        # locale.getpreferredencoding (the mechanism Path.write_text
+        # actually falls back to) reproduces the crash on any OS this
+        # suite runs on, not just Windows -- CI runs on ubuntu-latest,
+        # which alone would never have caught this.
+        monkeypatch.setattr(locale, "getpreferredencoding", lambda do_setlocale=True: "cp1252")
+        monkeypatch.setattr(cli, "_build_vector_store", lambda cfg: FakeVectorStore())
+        monkeypatch.setattr(cli, "_build_llm", lambda cfg: UnicodeFakeLLM())
+        monkeypatch.setattr(cli, "_load_corpus", lambda cfg: list(CHUNKS))
+        monkeypatch.setattr(cli, "_load_test_cases", lambda cfg, corpus, llm: [TEST_CASE])
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(MINIMAL_CONFIG, encoding="utf-8")
+        result = runner.invoke(cli.app, ["run", str(config_path)])
+        assert result.exit_code == 0, result.output
+
+        data = json.loads(config_path.with_suffix(".results.json").read_text(encoding="utf-8"))
+        assert "α-blockers" in data["case_results"][0]["output"]["generated_answer"]
 
     def test_unsupported_vector_store_type_fails_clearly(self, monkeypatch, tmp_path):
         monkeypatch.setattr(cli, "_load_corpus", lambda cfg: list(CHUNKS))
         monkeypatch.setattr(cli, "_load_test_cases", lambda cfg, corpus, llm: [TEST_CASE])
         config_path = tmp_path / "config.yaml"
-        config_path.write_text(MINIMAL_CONFIG.replace("type: chroma", "type: pinecone"))
+        config_path.write_text(MINIMAL_CONFIG.replace("type: chroma", "type: pinecone"), encoding="utf-8")
         result = runner.invoke(cli.app, ["run", str(config_path)])
         assert result.exit_code != 0
         assert "pinecone" in str(result.exception) or "pinecone" in result.output
@@ -120,7 +155,7 @@ class TestRun:
         monkeypatch.setattr(cli, "_load_corpus", lambda cfg: list(CHUNKS))
         monkeypatch.setattr(cli, "_load_test_cases", lambda cfg, corpus, llm: [TEST_CASE])
         config_path = tmp_path / "config.yaml"
-        config_path.write_text(MINIMAL_CONFIG.replace("type: ollama", "type: made-up-provider"))
+        config_path.write_text(MINIMAL_CONFIG.replace("type: ollama", "type: made-up-provider"), encoding="utf-8")
         result = runner.invoke(cli.app, ["run", str(config_path)])
         assert result.exit_code != 0
         assert "made-up-provider" in str(result.exception) or "made-up-provider" in result.output
