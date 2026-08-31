@@ -1,98 +1,89 @@
-import * as SQLite from 'expo-sqlite';
+import { supabase } from './supabase';
 import type { Patient } from './types';
-
-export const DB_NAME = 'rounds.db';
 
 /**
  * Local date as 'YYYY-MM-DD'. 'en-CA' formats in ISO order, and using the
- * device locale keeps "today" aligned with the doctor's actual day in India.
+ * device locale keeps "today" aligned with the doctor's actual day.
  */
 export function todayStr(d: Date = new Date()): string {
   return d.toLocaleDateString('en-CA');
 }
 
-/** Runs once when the database is first opened (via SQLiteProvider onInit). */
-export async function migrateDb(db: SQLite.SQLiteDatabase): Promise<void> {
-  await db.execAsync(`
-    PRAGMA journal_mode = WAL;
-    CREATE TABLE IF NOT EXISTS patients (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      name       TEXT    NOT NULL,
-      hospital   TEXT    NOT NULL DEFAULT '',
-      room       TEXT,
-      note       TEXT,
-      status     TEXT    NOT NULL DEFAULT 'active',
-      seen_date  TEXT,
-      created_at TEXT    NOT NULL
-    );
-  `);
+// Postgres sorts hospital names case-sensitively; re-sort client-side so
+// e.g. "apollo" and "Apollo" group together, same as the old SQLite COLLATE
+// NOCASE behavior. Stable sort preserves creation order within a hospital.
+function sortByHospital(patients: Patient[]): Patient[] {
+  return [...patients].sort((a, b) =>
+    (a.hospital || '').localeCompare(b.hospital || '', undefined, { sensitivity: 'base' })
+  );
 }
 
-export async function addPatient(
-  db: SQLite.SQLiteDatabase,
-  data: { name: string; hospital?: string; room?: string; note?: string }
-): Promise<void> {
-  await db.runAsync(
-    `INSERT INTO patients (name, hospital, room, note, status, seen_date, created_at)
-     VALUES (?, ?, ?, ?, 'active', NULL, ?)`,
-    data.name.trim(),
-    (data.hospital ?? '').trim(),
-    data.room?.trim() || null,
-    data.note?.trim() || null,
-    new Date().toISOString()
-  );
+export async function addPatient(data: {
+  name: string;
+  hospital?: string;
+  room?: string;
+  note?: string;
+}): Promise<void> {
+  const { error } = await supabase.from('patients').insert({
+    name: data.name.trim(),
+    hospital: (data.hospital ?? '').trim(),
+    room: data.room?.trim() || null,
+    note: data.note?.trim() || null,
+  });
+  if (error) throw error;
 }
 
 /** Everyone still on the rounding list (not yet discharged/removed). */
-export async function getActivePatients(db: SQLite.SQLiteDatabase): Promise<Patient[]> {
-  return db.getAllAsync<Patient>(
-    `SELECT * FROM patients
-     WHERE status = 'active'
-     ORDER BY hospital COLLATE NOCASE, created_at`
-  );
+export async function getActivePatients(): Promise<Patient[]> {
+  const { data, error } = await supabase
+    .from('patients')
+    .select('*')
+    .eq('status', 'active')
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return sortByHospital(data ?? []);
 }
 
 /** Active patients NOT yet checked off today — the end-of-day safety net. */
-export async function getUnseenToday(
-  db: SQLite.SQLiteDatabase,
-  today: string = todayStr()
-): Promise<Patient[]> {
-  return db.getAllAsync<Patient>(
-    `SELECT * FROM patients
-     WHERE status = 'active' AND (seen_date IS NULL OR seen_date != ?)
-     ORDER BY hospital COLLATE NOCASE, created_at`,
-    today
-  );
+export async function getUnseenToday(today: string = todayStr()): Promise<Patient[]> {
+  const { data, error } = await supabase
+    .from('patients')
+    .select('*')
+    .eq('status', 'active')
+    .or(`seen_date.is.null,seen_date.neq.${today}`)
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return sortByHospital(data ?? []);
 }
 
 /** Toggle "seen today" on/off. Passing seen=false clears it. */
 export async function setSeen(
-  db: SQLite.SQLiteDatabase,
   id: number,
   seen: boolean,
   today: string = todayStr()
 ): Promise<void> {
-  await db.runAsync(
-    `UPDATE patients SET seen_date = ? WHERE id = ?`,
-    seen ? today : null,
-    id
-  );
+  const { error } = await supabase
+    .from('patients')
+    .update({ seen_date: seen ? today : null })
+    .eq('id', id);
+  if (error) throw error;
 }
 
 /** Patient is discharged / no longer needs visiting — drops off the active list. */
-export async function dischargePatient(db: SQLite.SQLiteDatabase, id: number): Promise<void> {
-  await db.runAsync(`UPDATE patients SET status = 'done' WHERE id = ?`, id);
+export async function dischargePatient(id: number): Promise<void> {
+  const { error } = await supabase.from('patients').update({ status: 'done' }).eq('id', id);
+  if (error) throw error;
 }
 
-export async function deletePatient(db: SQLite.SQLiteDatabase, id: number): Promise<void> {
-  await db.runAsync(`DELETE FROM patients WHERE id = ?`, id);
+export async function deletePatient(id: number): Promise<void> {
+  const { error } = await supabase.from('patients').delete().eq('id', id);
+  if (error) throw error;
 }
 
 /** Distinct hospital names already used — powers the quick-pick chips on the add screen. */
-export async function getHospitals(db: SQLite.SQLiteDatabase): Promise<string[]> {
-  const rows = await db.getAllAsync<{ hospital: string }>(
-    `SELECT DISTINCT hospital FROM patients
-     WHERE hospital != '' ORDER BY hospital COLLATE NOCASE`
-  );
-  return rows.map((r) => r.hospital);
+export async function getHospitals(): Promise<string[]> {
+  const { data, error } = await supabase.from('patients').select('hospital').neq('hospital', '');
+  if (error) throw error;
+  const unique = [...new Set((data ?? []).map((r) => r.hospital))];
+  return unique.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
 }
