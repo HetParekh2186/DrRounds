@@ -27,7 +27,10 @@ dependencies = [
 
 [project.optional-dependencies]
 data = ["datasets>=2.19"]
-chroma = ["chromadb>=0.5"]
+# sentence-transformers is ChromaVectorStore's *default* embedding backend
+# (used whenever an embedding_function isn't passed explicitly) — a real
+# dependency of this extra, not just of the classifier-training path.
+chroma = ["chromadb>=0.5", "sentence-transformers>=3.0"]
 anthropic = ["anthropic>=0.30"]
 openai = ["openai>=1.30"]
 classifier = ["torch>=2.2", "transformers>=4.40", "datasets>=2.19", "scikit-learn>=1.4"]
@@ -41,6 +44,7 @@ dev = [
   # own extras) so `pip install -e ".[dev]"` alone can run the full suite
   "datasets>=2.19",
   "chromadb>=0.5",
+  "sentence-transformers>=3.0",
   "anthropic>=0.30",
   "openai>=1.30",
 ]
