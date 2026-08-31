@@ -77,21 +77,38 @@ a credentialed data-use agreement that has no place in a public open-source repo
 
 ```
 src/doctor_rounds/
-├── core/            # TestCase, PipelineOutput, EvalReport — the shared vocabulary
+├── core/
+│   ├── types.py          # TestCase, PipelineOutput, EvalReport — the shared vocabulary
+│   └── runner.py         # run_evaluation(): retrieve -> generate -> score, adapter-agnostic
 ├── metrics/
-│   ├── retrieval.py     # recall@k, precision@k, MRR, NDCG@k — pure functions, no I/O
-│   └── generation.py    # faithfulness, answer relevance (planned)
+│   ├── retrieval.py      # recall@k, precision@k, MRR, NDCG@k — pure functions, no I/O
+│   └── generation.py     # faithfulness, answer relevance (LLMJudge baseline)
 ├── data/
 │   └── pubmedqa.py       # real PubMedQA loading — see Data below
 ├── adapters/
-│   ├── vectorstore.py   # Protocol + ChromaVectorStore (local, no external service)
+│   ├── vectorstore.py    # Protocol + ChromaVectorStore (local, no external service)
 │   └── llm.py            # Protocol + Ollama/Anthropic/OpenAI implementations
 ├── testset/
 │   └── generator.py      # synthetic clinical QA generation from a corpus (planned)
-└── cli.py            # `doctor-rounds run config.yaml` (planned)
+└── cli.py                # `doctor-rounds init` / `doctor-rounds run config.yaml`
 tests/               # mirrors src/, one test module per module under test
 .github/workflows/   # CI: unit tests (3.10-3.12) + a separate real-network integration job
 ```
+
+## CLI
+
+```bash
+pip install -e ".[chroma,data]"    # add anthropic/openai extras too if you want those adapters
+doctor-rounds init                  # writes doctor-rounds.yaml
+# edit it — point at your corpus/LLM, or leave the PubMedQA defaults
+doctor-rounds run doctor-rounds.yaml
+```
+
+This runs a full evaluation — retrieval, generation, and (by default) LLM-judged faithfulness and
+relevance — and writes complete per-question results to `<config>.results.json`. Only Chroma,
+Ollama/Anthropic/OpenAI, and PubMedQA are wired up as config options today; unsupported values fail
+with a clear message rather than a stack trace. See [`cli.py`](src/doctor_rounds/cli.py) for the full
+config shape.
 
 ## Data
 
@@ -168,8 +185,8 @@ benchmarks the classifier against; the classifier itself is not yet built — tr
 - [x] Vector store adapter: `ChromaVectorStore` (local, no external service) — real semantic
       retrieval verified against sentence-transformers
 - [x] LLM adapters: Ollama (local, zero API key), Anthropic, OpenAI
+- [x] CLI (`doctor-rounds init`, `doctor-rounds run`) + reusable `core.runner.run_evaluation`
 - [ ] Synthetic test-set generator from a public medical corpus
-- [ ] CLI (`doctor-rounds run`, `doctor-rounds init`)
 - [ ] Local faithfulness classifier + benchmark study against LLM-judge
 - [ ] GitHub Action: metric-diff PR comments ("CI for your RAG pipeline")
 - [ ] Results dashboard
