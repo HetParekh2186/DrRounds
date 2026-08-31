@@ -26,6 +26,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+data = ["datasets>=2.19"]
 chroma = ["chromadb>=0.5"]
 anthropic = ["anthropic>=0.30"]
 openai = ["openai>=1.30"]
@@ -36,6 +37,12 @@ dev = [
   "pytest-asyncio>=0.23",
   "ruff>=0.5",
   "mypy>=1.10",
+  # test-only deps for optional adapters — kept here (not just under their
+  # own extras) so `pip install -e ".[dev]"` alone can run the full suite
+  "datasets>=2.19",
+  "chromadb>=0.5",
+  "anthropic>=0.30",
+  "openai>=1.30",
 ]
 
 [project.scripts]
@@ -50,7 +57,10 @@ packages = ["src/doctor_rounds"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-v --cov=doctor_rounds --cov-report=term-missing"
+addopts = "-v --cov=doctor_rounds --cov-report=term-missing -m 'not integration'"
+markers = [
+  "integration: exercises real network/dataset downloads; excluded by default, run explicitly with `pytest -m integration`",
+]
 
 [tool.ruff]
 line-length = 100
