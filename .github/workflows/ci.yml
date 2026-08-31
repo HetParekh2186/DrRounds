@@ -39,3 +39,24 @@ jobs:
         with:
           name: coverage-report
           path: coverage.xml
+
+  integration:
+    # Real HuggingFace dataset download + real embedding model — kept as
+    # its own job (single Python version, no coverage reporting) rather
+    # than folded into the matrix above, since it's testing external
+    # integrations, not per-version Python compatibility.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install package + dev dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Integration tests
+        run: pytest -m integration --no-cov
