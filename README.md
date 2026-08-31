@@ -109,6 +109,37 @@ See [`data/pubmedqa.py`](src/doctor_rounds/data/pubmedqa.py) — row-parsing is 
 without a network call; the actual HuggingFace download is exercised by a real integration test
 (`pytest -m integration`, also run in CI as its own job).
 
+## Benchmark
+
+[`scripts/run_pubmedqa_benchmark.py`](scripts/run_pubmedqa_benchmark.py) runs real retrieval — all
+1,000 labeled test cases, `ChromaVectorStore` with the default sentence-transformers embedder —
+against a 12,603-passage corpus (every labeled question's own passages plus 3,000 artificial-split
+examples as distractors) and reports genuine, reproducible numbers:
+
+| Metric | Value |
+| --- | --- |
+| Recall@3 | 0.6497 |
+| Recall@5 | 0.7268 |
+| Recall@10 | 0.7839 |
+| Precision@3 | 0.6927 |
+| NDCG@10 | 0.7962 |
+| MRR | 0.9670 |
+| Latency | ~15ms/query |
+
+Reproduce it yourself:
+
+```bash
+pip install -e ".[chroma,data]"
+python scripts/run_pubmedqa_benchmark.py --corpus-size 3000 --k 10
+```
+
+Full per-question results are written to `scripts/benchmark_results.json`. A high MRR alongside a
+comparatively lower recall@3 is a real, informative pattern here, not noise: it means the retriever
+almost always surfaces *a* relevant passage near the top (reflected in embedding similarity — see
+`ChromaVectorStore.retrieve`'s scoring), but a meaningful share of questions have supporting evidence
+spread across more passages than fit in the top 3 — exactly the kind of retrieval/generation-stage
+distinction the whole point of separating these metrics is to surface.
+
 ## Faithfulness classifier
 
 The generation-quality signal that matters most for a clinical tool is **faithfulness**: is every
@@ -123,17 +154,20 @@ something not present in its sources? Doctor Rounds' answer to this is:
 3. Ship both: the local classifier for fast/offline/CI use, and an LLM-judge adapter as a
    configurable alternative for anyone who wants it.
 
-This piece is not yet built — tracked in the [Roadmap](#roadmap).
+Step 3's LLM-judge half exists now (`metrics/generation.LLMJudge`) as the working baseline step 2
+benchmarks the classifier against; the classifier itself is not yet built — tracked in the
+[Roadmap](#roadmap).
 
 ## Roadmap
 
 - [x] Core types (`TestCase`, `PipelineOutput`, `EvalReport`)
 - [x] Retrieval metrics: recall@k, precision@k, MRR, NDCG@k — tested
+- [x] Generation metrics: `LLMJudge` baseline for faithfulness + relevance — tested
 - [x] Real data: PubMedQA loading (1,000 labeled test cases + a 211k-example corpus source)
+- [x] Real benchmark: 1,000 test cases against a 12,603-passage corpus — see [Benchmark](#benchmark)
 - [x] Vector store adapter: `ChromaVectorStore` (local, no external service) — real semantic
       retrieval verified against sentence-transformers
 - [x] LLM adapters: Ollama (local, zero API key), Anthropic, OpenAI
-- [ ] Generation metrics: faithfulness (LLM-judge baseline), answer relevance
 - [ ] Synthetic test-set generator from a public medical corpus
 - [ ] CLI (`doctor-rounds run`, `doctor-rounds init`)
 - [ ] Local faithfulness classifier + benchmark study against LLM-judge
