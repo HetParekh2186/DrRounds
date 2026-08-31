@@ -1,0 +1,24 @@
+{
+  "n_examples": 338,
+  "threshold": 0.5,
+  "classifier": {
+    "accuracy": 0.6124260355029586,
+    "precision": 0.6501766784452296,
+    "recall": 0.8518518518518519,
+    "f1": 0.7374749498997996,
+    "mean_latency_ms": 153.07479941963973
+  },
+  "llm_judge": {
+    "accuracy": 0.3875739644970414,
+    "precision": 0.6666666666666666,
+    "recall": 0.08333333333333333,
+    "f1": 0.14814814814814814,
+    "mean_latency_ms": 2280.735586688595,
+    "llm": "ollama",
+    "llm_model": "llama3.2:1b"
+  },
+  "classifier_vs_llm_judge_agreement": {
+    "cohen_kappa": 0.018078616281928306,
+    "raw_agreement": 0.23076923076923078
+  }
+}

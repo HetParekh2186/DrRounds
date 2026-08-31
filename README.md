@@ -84,14 +84,21 @@ src/doctor_rounds/
 │   ├── retrieval.py      # recall@k, precision@k, MRR, NDCG@k — pure functions, no I/O
 │   └── generation.py     # faithfulness, answer relevance (LLMJudge baseline)
 ├── data/
-│   └── pubmedqa.py       # real PubMedQA loading — see Data below
+│   ├── pubmedqa.py       # real PubMedQA loading — see Data below
+│   └── scifact.py        # real SciFact claim-verification data — faithfulness classifier training
 ├── adapters/
 │   ├── vectorstore.py    # Protocol + ChromaVectorStore (local, no external service)
 │   └── llm.py            # Protocol + Ollama/Anthropic/OpenAI implementations
 ├── testset/
 │   └── generator.py      # LLM-generated single-hop test cases from a corpus
+├── classifier/
+│   ├── types.py          # FaithfulnessExample — the training/eval example shape
+│   ├── corruption.py     # deterministic synthetic negative-example generation
+│   ├── training.py       # training-set assembly + metrics, torch-free and unit-tested
+│   └── model.py           # LocalFaithfulnessClassifier + ClassifierJudge (needs torch/transformers)
 └── cli.py                # `doctor-rounds init` / `doctor-rounds run config.yaml`
 tests/               # mirrors src/, one test module per module under test
+scripts/             # benchmark + training scripts — not unit tested, thin orchestration
 .github/workflows/   # CI: unit tests (3.10-3.12) + a separate real-network integration job
 ```
 
@@ -195,19 +202,65 @@ yet; it's real future work, tracked below rather than half-built.
 
 The generation-quality signal that matters most for a clinical tool is **faithfulness**: is every
 claim in the generated answer actually supported by the retrieved context, or did the model add
-something not present in its sources? Doctor Rounds' answer to this is:
+something not present in its sources? Doctor Rounds' answer to this:
 
-1. Fine-tune a small, fast NLI-style classifier (e.g. DeBERTa-v3-small) on (claim, context) pairs
-   labeled supported/unsupported, using public hallucination-detection datasets and synthetic
-   examples constructed by injecting errors into ground-truth clinical text.
-2. Benchmark that classifier against GPT-4-as-judge and, where feasible, human-labeled examples —
-   reporting agreement (Cohen's κ), latency, and cost, not just claiming it works.
-3. Ship both: the local classifier for fast/offline/CI use, and an LLM-judge adapter as a
-   configurable alternative for anyone who wants it.
+1. Fine-tune a small, fast sequence-pair classifier on (claim, context) pairs labeled
+   supported/unsupported — real claim-verification data (SciFact) plus synthetic negatives built by
+   injecting errors into supported claims (see [Synthetic test sets](#synthetic-test-sets)'s sibling
+   module, [`classifier/corruption.py`](src/doctor_rounds/classifier/corruption.py)).
+2. Benchmark that classifier against `LLMJudge` on real, held-out gold labels — reporting accuracy,
+   agreement (Cohen's κ), and latency, not just claiming it works.
+3. Ship both: the local classifier for fast/offline/CI use (`classifier/model.py`), and `LLMJudge`
+   as a configurable alternative for anyone who wants it.
 
-Step 3's LLM-judge half exists now (`metrics/generation.LLMJudge`) as the working baseline step 2
-benchmarks the classifier against; the classifier itself is not yet built — tracked in the
-[Roadmap](#roadmap).
+All three steps are built and have real numbers below — this section reports what was actually
+found, including two dead ends, because "loss went down" and "it generalizes" are different claims
+and this project reports the second, not just the first.
+
+**Training data:** [SciFact](https://arxiv.org/abs/2004.14974) (Wadden et al., 2020) — 957 labeled
+train claims (616 SUPPORT / 341 CONTRADICT) and 338 labeled validation claims, each a scientific
+claim paired with a cited abstract and a verdict (see [Data](#data)). `classifier/corruption.py`
+adds one synthetic negative per supported training claim — deterministically doubling a number or
+negating the claim — a second, more RAG-realistic failure mode than SciFact's own CONTRADICT rows.
+
+**Two things that didn't work, kept rather than quietly fixed:**
+
+- **DeBERTa-v3-small was the first model tried** — same class of small encoder — but benchmarked
+  **~54x slower per training step on CPU** than DistilBERT (its disentangled-attention mechanism has
+  no fast CPU kernel path here). On hardware with no CUDA-capable GPU, that's the difference between
+  minutes and hours; `scripts/train_faithfulness_classifier.py` defaults to `distilbert-base-uncased`
+  for exactly this reason, and documents `--model` for anyone with a GPU.
+- **An unweighted, unwarmed-up first training run scored *below* the validation set's own
+  majority-class baseline** (57.7% accuracy vs. a 63.9% baseline from always predicting "supported"),
+  despite training loss visibly dropping — synthetic augmentation had shifted the *training* class
+  balance well away from real data's, and the default learning rate had no warmup. Fixed with a
+  class-weighted loss (`_WeightedLossTrainer`), a lower learning rate (2e-5), and warmup — not by
+  discarding the synthetic negatives that caused the imbalance.
+
+**Real results** (`distilbert-base-uncased`, 3 epochs, 1,573 training examples, evaluated on all 338
+real SciFact validation claims — reproduce with `python scripts/train_faithfulness_classifier.py`
+then `python scripts/benchmark_faithfulness_classifier.py --llm ollama --llm-model llama3.2:1b`):
+
+| | Accuracy | Precision | Recall | F1 | Mean latency |
+| --- | --- | --- | --- | --- | --- |
+| **Local classifier** | 61.2% | 65.0% | 85.2% | 73.7% | 153ms |
+| **LLMJudge** (`llama3.2:1b` via Ollama) | 38.8% | 66.7% | 8.3% | 14.8% | 2,281ms |
+| Majority-class baseline (always "supported") | 63.9% | 63.9% | 100% | 78.0% | — |
+
+Classifier vs. LLM-judge agreement: **Cohen's κ = 0.018** (raw agreement 23.1%) — the two barely
+agree with each other at all, which is itself the finding: at this model size, they're not measuring
+the same thing. The classifier clearly outperforms this LLM judge, both in accuracy/F1 and at ~15x
+lower latency — but **`llama3.2:1b` is a 1.2B-parameter local model, a deliberately low-cost choice
+(no API billing required to reproduce this repo's numbers), not a strong one.** Its very low recall
+(8.3%) suggests it defaults to "not supported" far more than a stronger judge would. This comparison
+is honestly a "classifier beats a weak local LLM judge," not yet "classifier beats LLM-judging-LLM in
+general" — re-running `benchmark_faithfulness_classifier.py --llm anthropic` or `--llm openai`
+against a frontier model is the natural next step, tracked in the [Roadmap](#roadmap), and not run
+here because doing so needs a paid API key this environment doesn't have.
+
+Full per-example results: [`scripts/faithfulness_benchmark_results.json`](scripts/faithfulness_benchmark_results.json),
+[`scripts/classifier_training_metrics.json`](scripts/classifier_training_metrics.json). Trained
+weights aren't committed to git (a checkpoint is hundreds of MB) — the scripts above reproduce them.
 
 ## Roadmap
 
@@ -223,7 +276,11 @@ benchmarks the classifier against; the classifier itself is not yet built — tr
 - [x] Synthetic test-set generator: LLM-generated single-hop questions from any corpus — see
       [Synthetic test sets](#synthetic-test-sets)
 - [ ] Multi-hop synthetic questions (needs a chunk-pairing strategy)
-- [ ] Local faithfulness classifier + benchmark study against LLM-judge
+- [x] Local faithfulness classifier + benchmark study against LLM-judge — see
+      [Faithfulness classifier](#faithfulness-classifier) for the real numbers and two documented
+      dead ends
+- [ ] Benchmark the classifier against a frontier LLM judge (Anthropic/OpenAI), not just a small
+      local one — needs a paid API key this environment doesn't have
 - [ ] GitHub Action: metric-diff PR comments ("CI for your RAG pipeline")
 - [ ] Results dashboard
 
