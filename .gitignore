@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+dist/
+build/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Model artifacts / data (large, don't belong in git)
+*.pt
+*.bin
+*.safetensors
+/models/
+/data/raw/
+/data/cache/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
