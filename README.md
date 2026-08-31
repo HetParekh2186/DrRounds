@@ -77,19 +77,37 @@ a credentialed data-use agreement that has no place in a public open-source repo
 
 ```
 src/doctor_rounds/
-├── core/           # TestCase, PipelineOutput, EvalReport — the shared vocabulary
+├── core/            # TestCase, PipelineOutput, EvalReport — the shared vocabulary
 ├── metrics/
-│   ├── retrieval.py    # recall@k, precision@k, MRR, NDCG@k — pure functions, no I/O
-│   └── generation.py   # faithfulness, answer relevance
+│   ├── retrieval.py     # recall@k, precision@k, MRR, NDCG@k — pure functions, no I/O
+│   └── generation.py    # faithfulness, answer relevance (planned)
+├── data/
+│   └── pubmedqa.py       # real PubMedQA loading — see Data below
 ├── adapters/
-│   ├── vectorstore.py  # Protocol + implementations (Chroma, pgvector, ...)
-│   └── llm.py          # Protocol + implementations (Anthropic, OpenAI, Ollama, ...)
+│   ├── vectorstore.py   # Protocol + ChromaVectorStore (local, no external service)
+│   └── llm.py            # Protocol + Ollama/Anthropic/OpenAI implementations
 ├── testset/
-│   └── generator.py    # synthetic clinical QA generation from a corpus
-└── cli.py          # `doctor-rounds run config.yaml`
-tests/              # mirrors src/, one test module per module under test
-.github/workflows/  # CI: tests on every push; (planned) the eval-diff Action itself
+│   └── generator.py      # synthetic clinical QA generation from a corpus (planned)
+└── cli.py            # `doctor-rounds run config.yaml` (planned)
+tests/               # mirrors src/, one test module per module under test
+.github/workflows/   # CI: unit tests (3.10-3.12) + a separate real-network integration job
 ```
+
+## Data
+
+Test cases and the retrieval corpus come from **PubMedQA** (Jin et al., 2019), loaded for real from
+HuggingFace (`qiaojin/PubMedQA`) — not a hand-written toy fixture:
+
+- **1,000 expert-labeled questions** (`pqa_labeled`) — real expert-written long-form answers and
+  yes/no/maybe decisions, used as ground truth.
+- **211,269 questions** (`pqa_artificial`), each with ~4 passages of real PubMed abstract text, used
+  to build a retrieval corpus large enough that recall@k means something. With only the labeled
+  split's own ~4,000 passages in the corpus, retrieval is nearly trivial; buried among tens of
+  thousands of unrelated real biomedical passages, it's a genuine test of the retriever.
+
+See [`data/pubmedqa.py`](src/doctor_rounds/data/pubmedqa.py) — row-parsing is pure and unit-tested
+without a network call; the actual HuggingFace download is exercised by a real integration test
+(`pytest -m integration`, also run in CI as its own job).
 
 ## Faithfulness classifier
 
@@ -111,9 +129,11 @@ This piece is not yet built — tracked in the [Roadmap](#roadmap).
 
 - [x] Core types (`TestCase`, `PipelineOutput`, `EvalReport`)
 - [x] Retrieval metrics: recall@k, precision@k, MRR, NDCG@k — tested
+- [x] Real data: PubMedQA loading (1,000 labeled test cases + a 211k-example corpus source)
+- [x] Vector store adapter: `ChromaVectorStore` (local, no external service) — real semantic
+      retrieval verified against sentence-transformers
+- [x] LLM adapters: Ollama (local, zero API key), Anthropic, OpenAI
 - [ ] Generation metrics: faithfulness (LLM-judge baseline), answer relevance
-- [ ] Vector store adapters: Chroma (local, no API key needed), pgvector
-- [ ] LLM adapters: Ollama (local), Anthropic, OpenAI
 - [ ] Synthetic test-set generator from a public medical corpus
 - [ ] CLI (`doctor-rounds run`, `doctor-rounds init`)
 - [ ] Local faithfulness classifier + benchmark study against LLM-judge
