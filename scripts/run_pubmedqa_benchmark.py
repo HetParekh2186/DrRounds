@@ -28,8 +28,8 @@ from doctor_rounds.metrics.retrieval import (
     mean_reciprocal_rank,
     ndcg_at_k,
     precision_at_k,
-    reciprocal_rank,
     recall_at_k,
+    reciprocal_rank,
 )
 
 
