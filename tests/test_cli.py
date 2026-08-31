@@ -76,7 +76,7 @@ class TestRun:
         monkeypatch.setattr(cli, "_build_vector_store", lambda cfg: FakeVectorStore())
         monkeypatch.setattr(cli, "_build_llm", lambda cfg: FakeLLM())
         monkeypatch.setattr(cli, "_load_corpus", lambda cfg: list(CHUNKS))
-        monkeypatch.setattr(cli, "_load_test_cases", lambda cfg: [TEST_CASE])
+        monkeypatch.setattr(cli, "_load_test_cases", lambda cfg, corpus, llm: [TEST_CASE])
 
         config_path = tmp_path / "config.yaml"
         config_path.write_text(config_text)
@@ -108,7 +108,7 @@ class TestRun:
 
     def test_unsupported_vector_store_type_fails_clearly(self, monkeypatch, tmp_path):
         monkeypatch.setattr(cli, "_load_corpus", lambda cfg: list(CHUNKS))
-        monkeypatch.setattr(cli, "_load_test_cases", lambda cfg: [TEST_CASE])
+        monkeypatch.setattr(cli, "_load_test_cases", lambda cfg, corpus, llm: [TEST_CASE])
         config_path = tmp_path / "config.yaml"
         config_path.write_text(MINIMAL_CONFIG.replace("type: chroma", "type: pinecone"))
         result = runner.invoke(cli.app, ["run", str(config_path)])
@@ -118,7 +118,7 @@ class TestRun:
     def test_unsupported_llm_type_fails_clearly(self, monkeypatch, tmp_path):
         monkeypatch.setattr(cli, "_build_vector_store", lambda cfg: FakeVectorStore())
         monkeypatch.setattr(cli, "_load_corpus", lambda cfg: list(CHUNKS))
-        monkeypatch.setattr(cli, "_load_test_cases", lambda cfg: [TEST_CASE])
+        monkeypatch.setattr(cli, "_load_test_cases", lambda cfg, corpus, llm: [TEST_CASE])
         config_path = tmp_path / "config.yaml"
         config_path.write_text(MINIMAL_CONFIG.replace("type: ollama", "type: made-up-provider"))
         result = runner.invoke(cli.app, ["run", str(config_path)])
@@ -166,7 +166,39 @@ class TestLoadCorpusAndTestCasesSourceValidation:
 
     def test_load_test_cases_rejects_unsupported_source(self):
         with pytest.raises(Exception, match="made-up-source"):
-            cli._load_test_cases({"source": "made-up-source"})
+            cli._load_test_cases({"source": "made-up-source"}, [], FakeLLM())
+
+
+class TestLoadTestCasesGenerated:
+    """source: generated needs no network — it's testset.generator run
+    against an already-loaded corpus, so (unlike pubmedqa) it's exercised
+    for real here rather than deferred to an integration test."""
+
+    def test_generates_from_corpus_using_the_given_llm(self):
+        class GeneratingFakeLLM:
+            def generate(self, prompt: str) -> str:
+                return "QUESTION: What is it?\nANSWER: Metformin."
+
+        result = cli._load_test_cases(
+            {"source": "generated", "n": 1, "seed": 0}, list(CHUNKS), GeneratingFakeLLM()
+        )
+        assert len(result) == 1
+        assert result[0].ground_truth_answer == "Metformin."
+
+    def test_defaults_n_to_50(self):
+        class CountingFakeLLM:
+            def __init__(self):
+                self.calls = 0
+
+            def generate(self, prompt: str) -> str:
+                self.calls += 1
+                return "QUESTION: Q?\nANSWER: A."
+
+        chunks = [Chunk(id=f"c{i}", text=f"passage {i}") for i in range(60)]
+        llm = CountingFakeLLM()
+        result = cli._load_test_cases({"source": "generated"}, chunks, llm)
+        assert len(result) == 50
+        assert llm.calls == 50
 
 
 @pytest.mark.integration

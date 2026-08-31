@@ -24,6 +24,7 @@ from doctor_rounds.core.runner import run_evaluation
 from doctor_rounds.core.types import Chunk, TestCase
 from doctor_rounds.data import pubmedqa
 from doctor_rounds.metrics.generation import LLMJudge
+from doctor_rounds.testset.generator import generate_test_set
 
 app = typer.Typer(
     add_completion=False,
@@ -54,9 +55,15 @@ corpus:
   split: pqa_artificial
   limit: 1000          # number of artificial-split examples to add as distractors
 
+# source: pubmedqa (default) uses PubMedQA's labeled questions. Or
+# source: generated has the `llm` above write questions from the corpus
+# itself (see testset/generator.py) — use this to evaluate against your
+# own documents instead of PubMedQA's pre-labeled set.
 test_cases:
   source: pubmedqa
   limit: 50             # number of labeled test cases to evaluate; omit for all 1,000
+  # n: 50               # (source: generated only) how many questions to generate
+  # seed: 42             # (source: generated only) makes chunk sampling reproducible
 
 k: 10                   # how many chunks to retrieve per question
 use_judge: true         # score faithfulness/relevance with an LLM judge (extra LLM calls)
@@ -110,11 +117,22 @@ def _load_corpus(cfg: dict[str, Any]) -> list[Chunk]:
     )
 
 
-def _load_test_cases(cfg: dict[str, Any]) -> list[TestCase]:
+def _load_test_cases(cfg: dict[str, Any], corpus: list[Chunk], llm: LLM) -> list[TestCase]:
     source = cfg.get("source", "pubmedqa")
-    if source != "pubmedqa":
-        raise typer.BadParameter(f"Unsupported test_cases.source: {source!r} (only 'pubmedqa' is built in)")
-    return pubmedqa.load_test_cases(limit=cfg.get("limit"))
+    if source == "pubmedqa":
+        return pubmedqa.load_test_cases(limit=cfg.get("limit"))
+    if source == "generated":
+        # LLM-generated from the already-loaded corpus, for evaluating a
+        # pipeline over your own documents rather than PubMedQA's — see
+        # testset/generator.py. Uses the same `llm` the pipeline itself
+        # will run against unless generator_llm overrides it below.
+        return generate_test_set(
+            corpus,
+            llm,
+            n=cfg.get("n", 50),
+            seed=cfg.get("seed"),
+        )
+    raise typer.BadParameter(f"Unsupported test_cases.source: {source!r} (expected pubmedqa or generated)")
 
 
 @app.command()
@@ -130,12 +148,12 @@ def run(config_path: str = typer.Argument(..., help="Path to a YAML config (see 
     store = _build_vector_store(config.get("vector_store", {}))
     store.add(corpus)
 
-    console.print("[bold]Loading test cases...[/bold]")
-    test_cases = _load_test_cases(config.get("test_cases", {}))
-    console.print(f"  -> {len(test_cases)} test cases")
-
     llm = _build_llm(config.get("llm", {}))
     judge = LLMJudge(llm) if config.get("use_judge", True) else None
+
+    console.print("[bold]Loading test cases...[/bold]")
+    test_cases = _load_test_cases(config.get("test_cases", {}), corpus, llm)
+    console.print(f"  -> {len(test_cases)} test cases")
 
     console.print("[bold]Running evaluation...[/bold]")
     report = run_evaluation(

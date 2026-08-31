@@ -89,7 +89,7 @@ src/doctor_rounds/
 │   ├── vectorstore.py    # Protocol + ChromaVectorStore (local, no external service)
 │   └── llm.py            # Protocol + Ollama/Anthropic/OpenAI implementations
 ├── testset/
-│   └── generator.py      # synthetic clinical QA generation from a corpus (planned)
+│   └── generator.py      # LLM-generated single-hop test cases from a corpus
 └── cli.py                # `doctor-rounds init` / `doctor-rounds run config.yaml`
 tests/               # mirrors src/, one test module per module under test
 .github/workflows/   # CI: unit tests (3.10-3.12) + a separate real-network integration job
@@ -109,6 +109,11 @@ relevance — and writes complete per-question results to `<config>.results.json
 Ollama/Anthropic/OpenAI, and PubMedQA are wired up as config options today; unsupported values fail
 with a clear message rather than a stack trace. See [`cli.py`](src/doctor_rounds/cli.py) for the full
 config shape.
+
+Test cases don't have to come from PubMedQA: set `test_cases.source: generated` and Doctor Rounds
+will have the configured LLM write questions directly from your own indexed corpus (see
+[Synthetic test sets](#synthetic-test-sets)) — the way to actually evaluate a pipeline built over
+your own documents rather than a public benchmark.
 
 ## Data
 
@@ -157,6 +162,29 @@ almost always surfaces *a* relevant passage near the top (reflected in embedding
 spread across more passages than fit in the top 3 — exactly the kind of retrieval/generation-stage
 distinction the whole point of separating these metrics is to surface.
 
+## Synthetic test sets
+
+Most real RAG pipelines run over documents that don't come with a labeled QA set the way PubMedQA
+does. [`testset/generator.py`](src/doctor_rounds/testset/generator.py) closes that gap: it takes
+chunks from your own corpus and an `LLM` and, for each sampled chunk, asks the model to write one
+question answerable from that chunk alone plus a ground-truth answer grounded in nothing else. The
+chunk's own id becomes the resulting `TestCase`'s ground-truth chunk id, so it plugs directly into
+`run_evaluation` — no hand-labeling required to get started.
+
+```python
+from doctor_rounds.testset.generator import generate_test_set
+
+test_cases = generate_test_set(corpus, llm, n=50, seed=42)  # seed makes chunk sampling reproducible
+```
+
+Or via the CLI: set `test_cases.source: generated` in your config (see [CLI](#cli)). A chunk whose
+generated response doesn't parse into a clean question/answer pair is skipped rather than retried or
+faked, so a batch of bad LLM output never silently swaps in different chunks than the ones sampled.
+
+v1 only generates `QuestionType.SINGLE_HOP` cases. Multi-hop generation — synthesizing a question
+that requires combining two or more chunks — needs a chunk-pairing strategy this module doesn't have
+yet; it's real future work, tracked below rather than half-built.
+
 ## Faithfulness classifier
 
 The generation-quality signal that matters most for a clinical tool is **faithfulness**: is every
@@ -186,7 +214,9 @@ benchmarks the classifier against; the classifier itself is not yet built — tr
       retrieval verified against sentence-transformers
 - [x] LLM adapters: Ollama (local, zero API key), Anthropic, OpenAI
 - [x] CLI (`doctor-rounds init`, `doctor-rounds run`) + reusable `core.runner.run_evaluation`
-- [ ] Synthetic test-set generator from a public medical corpus
+- [x] Synthetic test-set generator: LLM-generated single-hop questions from any corpus — see
+      [Synthetic test sets](#synthetic-test-sets)
+- [ ] Multi-hop synthetic questions (needs a chunk-pairing strategy)
 - [ ] Local faithfulness classifier + benchmark study against LLM-judge
 - [ ] GitHub Action: metric-diff PR comments ("CI for your RAG pipeline")
 - [ ] Results dashboard
