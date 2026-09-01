@@ -288,26 +288,40 @@ negating the claim — a second, more RAG-realistic failure mode than SciFact's 
 
 **Real results** (`distilbert-base-uncased`, 3 epochs, 1,573 training examples, evaluated on all 338
 real SciFact validation claims — reproduce with `python scripts/train_faithfulness_classifier.py`
-then `python scripts/benchmark_faithfulness_classifier.py --llm ollama --llm-model llama3.2:1b`):
+then `python scripts/benchmark_faithfulness_classifier.py --llm ollama --llm-model <model>`), against
+**two** local LLM judges, not one — a deliberately weak one and a genuinely capable one, both free:
 
 | | Accuracy | Precision | Recall | F1 | Mean latency |
 | --- | --- | --- | --- | --- | --- |
-| **Local classifier** | 61.2% | 65.0% | 85.2% | 73.7% | 153ms |
-| **LLMJudge** (`llama3.2:1b` via Ollama) | 38.8% | 66.7% | 8.3% | 14.8% | 2,281ms |
+| **Local classifier** | 61.2% | 65.0% | 85.2% | 73.7% | **153ms** |
+| LLMJudge (`llama3.2:1b`, 1.2B params) | 38.8% | 66.7% | 8.3% | 14.8% | 2,281ms |
+| LLMJudge (`llama3.1:8b`, 8B params) | **76.6%** | 74.2% | 97.2% | **84.2%** | 4,832ms |
 | Majority-class baseline (always "supported") | 63.9% | 63.9% | 100% | 78.0% | — |
 
-Classifier vs. LLM-judge agreement: **Cohen's κ = 0.018** (raw agreement 23.1%) — the two barely
-agree with each other at all, which is itself the finding: at this model size, they're not measuring
-the same thing. The classifier clearly outperforms this LLM judge, both in accuracy/F1 and at ~15x
-lower latency — but **`llama3.2:1b` is a 1.2B-parameter local model, a deliberately low-cost choice
-(no API billing required to reproduce this repo's numbers), not a strong one.** Its very low recall
-(8.3%) suggests it defaults to "not supported" far more than a stronger judge would. This comparison
-is honestly a "classifier beats a weak local LLM judge," not yet "classifier beats LLM-judging-LLM in
-general" — re-running `benchmark_faithfulness_classifier.py --llm anthropic` or `--llm openai`
-against a frontier model is the natural next step, tracked in the [Roadmap](#roadmap), and not run
-here because doing so needs a paid API key this environment doesn't have.
+This is a real, two-sided finding, not a one-sided "the classifier wins" story:
 
-Full per-example results: [`scripts/faithfulness_benchmark_results.json`](scripts/faithfulness_benchmark_results.json),
+- Against the small, zero-setup default (`llama3.2:1b`), the classifier clearly wins — that model is
+  actively unreliable here (manual spot checks found it scoring an absurd, false answer *higher* than
+  a correct one), and its own results land *below* the majority-class baseline.
+- Against a genuinely capable free local model (`llama3.1:8b`), **the LLM judge wins on accuracy** —
+  76.6% vs. 61.2%, and it's not close. The honest conclusion is a real cost/latency tradeoff, not a
+  verdict: the classifier is right less often, but answers in **~32x less time** (153ms vs. 4,832ms)
+  with no per-call cost — worth it for CI/high-volume use where an 8B-model judge call on every
+  retrieved chunk isn't practical; not worth it when accuracy matters more than throughput and a
+  capable judge is available.
+- Classifier-vs-judge agreement (Cohen's κ) is **near zero either way** (0.018 with the 1B model,
+  0.001 with the 8B model) *despite* 72.8% raw agreement against the 8B judge — the well-known
+  artifact of two classifiers that both lean toward predicting the majority class: most of that raw
+  agreement is two different systems independently guessing "supported" on an already-supported-heavy
+  dataset, not real agreement on the hard cases. Cohen's κ correcting for that chance overlap, and
+  landing near zero, is the more informative number here, not the raw agreement percentage.
+
+Neither comparison used a paid API — `llama3.1:8b` is still a free, locally-installed Ollama model,
+just a larger one (`ollama pull llama3.1:8b`). A frontier API judge (Claude, GPT-4) is the one
+comparison genuinely not run here, tracked honestly in the [Roadmap](#roadmap) rather than implied.
+
+Full per-example results: [`scripts/faithfulness_benchmark_results_1b.json`](scripts/faithfulness_benchmark_results_1b.json),
+[`scripts/faithfulness_benchmark_results_8b.json`](scripts/faithfulness_benchmark_results_8b.json),
 [`scripts/classifier_training_metrics.json`](scripts/classifier_training_metrics.json). Trained
 weights aren't committed to git (a checkpoint is hundreds of MB) — the scripts above reproduce them.
 
@@ -326,10 +340,10 @@ weights aren't committed to git (a checkpoint is hundreds of MB) — the scripts
       [Synthetic test sets](#synthetic-test-sets)
 - [ ] Multi-hop synthetic questions (needs a chunk-pairing strategy)
 - [x] Local faithfulness classifier + benchmark study against LLM-judge — see
-      [Faithfulness classifier](#faithfulness-classifier) for the real numbers and two documented
-      dead ends
-- [ ] Benchmark the classifier against a frontier LLM judge (Anthropic/OpenAI), not just a small
-      local one — needs a paid API key this environment doesn't have
+      [Faithfulness classifier](#faithfulness-classifier) for the real numbers, benchmarked against
+      both a weak (1B) and a capable (8B) local judge, and two documented dead ends
+- [ ] Benchmark the classifier against a paid frontier LLM judge (Anthropic/OpenAI) too, not just
+      local Ollama models — needs a paid API key this environment doesn't have
 - [x] GitHub Action: metric-diff PR comments ("CI for your RAG pipeline") — see
       [CI for your RAG pipeline](#ci-for-your-rag-pipeline)
 - [ ] Results dashboard
