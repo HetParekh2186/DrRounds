@@ -1,0 +1,96 @@
+name: RAG eval PR comment
+
+# "CI for your RAG pipeline": runs a small real evaluation on every PR
+# (real retrieval against real PubMedQA data, real generation via a
+# locally-installed Ollama model — no paid API, no secrets needed) and
+# posts the metric diff against a committed baseline as a PR comment,
+# using `doctor-rounds compare` (see core/compare.py). Adopting this in
+# your own RAG pipeline's repo means: copy this workflow, point it at
+# your own doctor-rounds config and a baseline results file for your
+# pipeline instead of this demo's.
+#
+# Scoped to retrieval metrics only (see .github/rag-eval-demo.yaml's
+# comments) — they're deterministic given a fixed corpus and questions,
+# so this check doesn't flake the way LLM-judged generation metrics
+# would run to run.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  rag-eval-diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Doctor Rounds
+        run: pip install -e ".[chroma,data]"
+
+      - name: Install Ollama and pull the demo model
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          nohup ollama serve > ollama.log 2>&1 &
+          disown
+          for i in $(seq 1 30); do
+            curl -s http://localhost:11434/api/tags > /dev/null && break
+            sleep 1
+          done
+          ollama pull llama3.2:1b
+
+      - name: Run the demo evaluation
+        run: doctor-rounds run .github/rag-eval-demo.yaml
+
+      - name: Compare against the committed baseline
+        id: compare
+        continue-on-error: true
+        run: >
+          doctor-rounds compare benchmarks/rag-eval-baseline.json
+          .github/rag-eval-demo.results.json --markdown-out comparison.md
+
+      - name: Post PR comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- doctor-rounds-eval-comment -->';
+            const body = marker + '\n' + fs.readFileSync('comparison.md', 'utf8');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find((c) => c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      - name: Fail the job if a metric regressed
+        if: steps.compare.outcome == 'failure'
+        run: |
+          echo "doctor-rounds compare detected a regression -- see the PR comment for details."
+          exit 1

@@ -79,7 +79,8 @@ a credentialed data-use agreement that has no place in a public open-source repo
 src/doctor_rounds/
 ├── core/
 │   ├── types.py          # TestCase, PipelineOutput, EvalReport — the shared vocabulary
-│   └── runner.py         # run_evaluation(): retrieve -> generate -> score, adapter-agnostic
+│   ├── runner.py         # run_evaluation(): retrieve -> generate -> score, adapter-agnostic
+│   └── compare.py        # diffs two EvalReports — the PR-comment GitHub Action's engine
 ├── metrics/
 │   ├── retrieval.py      # recall@k, precision@k, MRR, NDCG@k — pure functions, no I/O
 │   └── generation.py     # faithfulness, answer relevance (LLMJudge baseline)
@@ -99,7 +100,7 @@ src/doctor_rounds/
 └── cli.py                # `doctor-rounds init` / `doctor-rounds run config.yaml`
 tests/               # mirrors src/, one test module per module under test
 scripts/             # benchmark + training scripts — not unit tested, thin orchestration
-.github/workflows/   # CI: unit tests (3.10-3.12) + a separate real-network integration job
+.github/workflows/   # unit tests (3.10-3.12) + integration job + the eval-diff PR-comment bot
 ```
 
 ## CLI
@@ -127,6 +128,38 @@ score it with the trained classifier instead (see [Faithfulness classifier](#fai
 — worth doing, since the benchmark there found a small local LLM judge (the zero-cost default) can be
 actively unreliable: scoring an absurd, wrong answer *higher* than a correct one on manual spot checks.
 Relevance still needs the `llm`, since the classifier was only trained on (claim, context) pairs.
+
+## CI for your RAG pipeline
+
+`doctor-rounds compare baseline.results.json new.results.json` diffs two evaluation runs — e.g. main
+vs. a PR branch — and reports which metrics moved, by how much, and flags genuine regressions:
+
+```bash
+doctor-rounds compare benchmarks/rag-eval-baseline.json .github/rag-eval-demo.results.json
+```
+
+```
+### Doctor Rounds evaluation: `main` → `pr-branch`
+
+| Metric | Baseline | New | Delta |
+| --- | --- | --- | --- |
+| recall@10 | 0.8123 | 0.7654 | 🔴 -0.0469 |
+
+⚠️ Possible regression in: recall@10
+```
+
+It exits non-zero on a regression (`--threshold` controls sensitivity) and can write the table to a
+file with `--markdown-out`. [`.github/workflows/rag-eval-pr-comment.yml`](.github/workflows/rag-eval-pr-comment.yml)
+wires this into an actual PR bot: on every PR, it installs a free local Ollama model, runs a small
+real evaluation ([`.github/rag-eval-demo.yaml`](.github/rag-eval-demo.yaml) — real PubMedQA retrieval,
+scoped to retrieval-only metrics since they're deterministic and won't flake the way LLM-judged
+generation metrics would run to run), diffs it against a committed baseline
+([`benchmarks/rag-eval-baseline.json`](benchmarks/rag-eval-baseline.json)), and posts (or updates, on
+a later push to the same PR) a comment with the result — failing the check if anything regressed. No
+paid API key or secret needed; `GITHUB_TOKEN` is enough to comment.
+
+To adopt this in your own RAG pipeline's repo: copy the workflow, point it at your own
+`doctor-rounds.yaml` and a baseline results file for your pipeline instead of this demo's.
 
 ## Data
 
@@ -287,7 +320,8 @@ weights aren't committed to git (a checkpoint is hundreds of MB) — the scripts
       dead ends
 - [ ] Benchmark the classifier against a frontier LLM judge (Anthropic/OpenAI), not just a small
       local one — needs a paid API key this environment doesn't have
-- [ ] GitHub Action: metric-diff PR comments ("CI for your RAG pipeline")
+- [x] GitHub Action: metric-diff PR comments ("CI for your RAG pipeline") — see
+      [CI for your RAG pipeline](#ci-for-your-rag-pipeline)
 - [ ] Results dashboard
 
 ## Development

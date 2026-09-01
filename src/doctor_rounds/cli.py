@@ -10,8 +10,10 @@ actually run.
 
 from __future__ import annotations
 
+import io
+import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import typer
 import yaml
@@ -20,11 +22,27 @@ from rich.table import Table
 
 from doctor_rounds.adapters.llm import LLM, AnthropicLLM, OllamaLLM, OpenAILLM
 from doctor_rounds.adapters.vectorstore import ChromaVectorStore, VectorStore
+from doctor_rounds.core.compare import compare_reports, format_comparison_markdown
 from doctor_rounds.core.runner import run_evaluation
-from doctor_rounds.core.types import Chunk, TestCase
+from doctor_rounds.core.types import Chunk, EvalReport, TestCase
 from doctor_rounds.data import pubmedqa
 from doctor_rounds.metrics.generation import Judge, LLMJudge
 from doctor_rounds.testset.generator import generate_test_set
+
+if sys.platform == "win32":
+    # Windows' console defaults to the system codepage (cp1252 here), not
+    # UTF-8 -- this project's own messages use real Unicode (em dashes,
+    # arrows, emoji in `compare`'s output), which crashed with
+    # UnicodeEncodeError printing to a plain PowerShell/cmd terminal.
+    # Same root cause as the earlier Path.write_text() encoding fix, just
+    # hitting stdout instead of a file this time. Must happen before
+    # Console() below, which reads the stream's encoding at construction.
+    # sys.stdout/stderr are typed as plain TextIO (no .reconfigure) even
+    # though they're really io.TextIOWrapper at runtime on every real
+    # interpreter -- cast rather than suppress, so a genuinely different
+    # stream type would still be a real mypy error elsewhere.
+    cast(io.TextIOWrapper, sys.stdout).reconfigure(encoding="utf-8")
+    cast(io.TextIOWrapper, sys.stderr).reconfigure(encoding="utf-8")
 
 app = typer.Typer(
     add_completion=False,
@@ -214,6 +232,34 @@ def run(config_path: str = typer.Argument(..., help="Path to a YAML config (see 
     out_path = Path(config_path).with_suffix(".results.json")
     out_path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
     console.print(f"[green]Full results written to {out_path}[/green]")
+
+
+@app.command()
+def compare(
+    baseline: str = typer.Argument(..., help="Path to a baseline .results.json (e.g. from main)"),
+    new: str = typer.Argument(..., help="Path to a new .results.json (e.g. from a PR branch)"),
+    threshold: float = typer.Option(0.02, help="A metric dropping by more than this counts as a regression"),
+    markdown_out: str | None = typer.Option(None, "--markdown-out", help="Also write the Markdown table to this path"),
+) -> None:
+    """Diff two evaluation results and report metric deltas / regressions.
+
+    Exits non-zero if any metric regressed — the mechanism behind the
+    metric-diff GitHub Action ("CI for your RAG pipeline"), which runs
+    this against a committed baseline and posts the result as a PR
+    comment. See .github/workflows/rag-eval-pr-comment.yml.
+    """
+    baseline_report = EvalReport.model_validate_json(Path(baseline).read_text(encoding="utf-8"))
+    new_report = EvalReport.model_validate_json(Path(new).read_text(encoding="utf-8"))
+
+    result = compare_reports(baseline_report, new_report, regression_threshold=threshold)
+    markdown = format_comparison_markdown(result)
+    console.print(markdown)
+
+    if markdown_out:
+        Path(markdown_out).write_text(markdown, encoding="utf-8")
+
+    if result.has_regressions:
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":

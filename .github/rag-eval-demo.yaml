@@ -1,0 +1,33 @@
+pipeline_name: rag-eval-demo
+
+# Deliberately small and fast -- this config exists for CI (see
+# .github/workflows/rag-eval-pr-comment.yml), not for a real benchmark
+# run (see scripts/run_pubmedqa_benchmark.py and the README for that).
+vector_store:
+  type: chroma
+  collection_name: rag_eval_demo
+
+llm:
+  type: ollama
+  model: llama3.2:1b
+
+corpus:
+  source: pubmedqa
+  split: pqa_artificial
+  limit: 300
+
+test_cases:
+  source: pubmedqa
+  limit: 10
+
+k: 5
+
+# Retrieval metrics (recall@k, precision@k, NDCG@k, MRR) are fully
+# deterministic given a fixed corpus and questions -- no LLM randomness
+# involved. Generation metrics (faithfulness, relevance) depend on an
+# LLM judge call and are inherently noisier run to run, which would make
+# a CI regression check flaky, so this demo config leaves them off.
+# `doctor-rounds compare` diffs whatever metrics both runs share either
+# way -- this is a scoping choice for the CI demo, not a limitation of
+# the compare command itself.
+use_judge: false

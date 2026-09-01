@@ -284,6 +284,88 @@ class TestBuildClassifierJudgeReal:
         assert judge.score_relevance("an answer", "a question") == pytest.approx(0.5)
 
 
+def _write_report(path, pipeline_name: str, **metrics: float) -> None:
+    from doctor_rounds.core.types import (
+        CaseResult,
+        EvalReport,
+        MetricScore,
+        PipelineOutput,
+        RetrievedChunk,
+    )
+
+    chunk = Chunk(id="c1", text="x")
+    output = PipelineOutput(test_case_id="tc1", retrieved_chunks=[RetrievedChunk(chunk=chunk, rank=0)], generated_answer="a")
+    scores = [MetricScore(name=name, value=value) for name, value in metrics.items()]
+    report = EvalReport(pipeline_name=pipeline_name, case_results=[CaseResult(test_case=TEST_CASE, output=output, scores=scores)])
+    path.write_text(report.model_dump_json(), encoding="utf-8")
+
+
+class TestCompareCommand:
+    def test_prints_markdown_and_exits_zero_when_no_regression(self, tmp_path):
+        baseline = tmp_path / "baseline.results.json"
+        new = tmp_path / "new.results.json"
+        _write_report(baseline, "main", **{"recall@10": 0.80})
+        _write_report(new, "pr-branch", **{"recall@10": 0.85})
+
+        result = runner.invoke(cli.app, ["compare", str(baseline), str(new)])
+        assert result.exit_code == 0, result.output
+        assert "recall@10" in result.output
+        assert "No regressions detected" in result.output
+
+    def test_exits_nonzero_on_regression(self, tmp_path):
+        baseline = tmp_path / "baseline.results.json"
+        new = tmp_path / "new.results.json"
+        _write_report(baseline, "main", **{"recall@10": 0.80})
+        _write_report(new, "pr-branch", **{"recall@10": 0.50})
+
+        result = runner.invoke(cli.app, ["compare", str(baseline), str(new)])
+        assert result.exit_code == 1
+        assert "Possible regression" in result.output
+
+    def test_output_contains_real_unicode_not_stripped(self, tmp_path):
+        # regression coverage for the encoding fix itself: confirms the
+        # arrow/emoji in the markdown actually reach stdout rather than
+        # being silently ASCII-downgraded -- the crash this guards
+        # against (UnicodeEncodeError on a cp1252 Windows console) was
+        # reproduced and fixed manually on a real Windows terminal; it
+        # isn't reproducible through CliRunner, which isolates stdout in
+        # a plain UTF-8 buffer regardless of the real console's codepage.
+        baseline = tmp_path / "baseline.results.json"
+        new = tmp_path / "new.results.json"
+        _write_report(baseline, "main", **{"recall@10": 0.80})
+        _write_report(new, "pr-branch", **{"recall@10": 0.85})
+
+        result = runner.invoke(cli.app, ["compare", str(baseline), str(new)])
+        assert result.exit_code == 0, result.output
+        assert "→" in result.output  # the arrow between pipeline names
+
+    def test_custom_threshold(self, tmp_path):
+        baseline = tmp_path / "baseline.results.json"
+        new = tmp_path / "new.results.json"
+        _write_report(baseline, "main", **{"recall@10": 0.80})
+        _write_report(new, "pr-branch", **{"recall@10": 0.70})  # -0.10 drop
+
+        # default threshold (0.02) would flag this as a regression
+        default_result = runner.invoke(cli.app, ["compare", str(baseline), str(new)])
+        assert default_result.exit_code == 1
+
+        # a looser threshold should not
+        loose_result = runner.invoke(cli.app, ["compare", str(baseline), str(new), "--threshold", "0.5"])
+        assert loose_result.exit_code == 0, loose_result.output
+
+    def test_writes_markdown_out_file(self, tmp_path):
+        baseline = tmp_path / "baseline.results.json"
+        new = tmp_path / "new.results.json"
+        markdown_out = tmp_path / "comment.md"
+        _write_report(baseline, "main", **{"recall@10": 0.80})
+        _write_report(new, "pr-branch", **{"recall@10": 0.85})
+
+        result = runner.invoke(cli.app, ["compare", str(baseline), str(new), "--markdown-out", str(markdown_out)])
+        assert result.exit_code == 0, result.output
+        assert markdown_out.exists()
+        assert "recall@10" in markdown_out.read_text(encoding="utf-8")
+
+
 class TestLoadCorpusAndTestCasesSourceValidation:
     """Only the source-validation branch — the pubmedqa-backed happy path
     is real network I/O, covered by data/pubmedqa.py's own integration
