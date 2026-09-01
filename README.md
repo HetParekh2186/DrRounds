@@ -159,7 +159,17 @@ a later push to the same PR) a comment with the result — failing the check if 
 paid API key or secret needed; `GITHUB_TOKEN` is enough to comment.
 
 To adopt this in your own RAG pipeline's repo: copy the workflow, point it at your own
-`doctor-rounds.yaml` and a baseline results file for your pipeline instead of this demo's.
+`doctor-rounds.yaml` and a baseline results file for your pipeline instead of this demo's. See it
+running for real on [this repo's own PR #1](https://github.com/HetParekh2186/DrRounds/pull/1) —
+a real config change, real evaluation, real bot comment, not a screenshot.
+
+The committed baseline is a snapshot, not something the workflow updates on its own — after merging
+a PR that intentionally changes `.github/rag-eval-demo.yaml` (or the underlying corpus/model), rerun
+`doctor-rounds run .github/rag-eval-demo.yaml` against the new `main` and commit the refreshed
+`benchmarks/rag-eval-baseline.json`, the same way PR #1 was followed up. Auto-refreshing it on every
+merge to `main` is possible but adds real complexity (write-back permissions, race conditions with
+concurrent merges) for a benefit this project doesn't need yet — a deliberate scoping choice, not an
+oversight.
 
 ## Data
 
