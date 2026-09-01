@@ -18,7 +18,7 @@ corpus:
 
 test_cases:
   source: pubmedqa
-  limit: 10
+  limit: 15
 
 k: 5
 
